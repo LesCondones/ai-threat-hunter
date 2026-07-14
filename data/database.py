@@ -45,3 +45,46 @@ def get_high_priority(threshold=80):
      
      con.close()
      return results
+ 
+def create_feedback_table():
+    con = get_connection()
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS AnalystFeedback(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            jailbreak_id INTEGER NOT NULL,
+            original_tactic TEXT,
+            corrected_tactic TEXT,
+            original_severity TEXT,
+            corrected_severity TEXT,
+            analyst_notes TEXT,
+            reviewed_at TEXT,
+            FOREIGN KEY (jailbreak_id) REFERENCES Jailbreak(id))"""
+    )
+    con.commit()
+    con.close()
+
+
+def insert_feedback(jailbreak_id, original_tactic, corrected_tactic,
+                     original_severity, corrected_severity, analyst_notes):
+    con = get_connection()
+    con.execute(
+        """INSERT INTO AnalystFeedback
+           (jailbreak_id, original_tactic, corrected_tactic,
+            original_severity, corrected_severity, analyst_notes, reviewed_at)
+           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+        (jailbreak_id, original_tactic, corrected_tactic,
+         original_severity, corrected_severity, analyst_notes)
+    )
+    con.commit()
+    con.close()
+
+
+def get_feedback_history(jailbreak_id):
+    con = get_connection()
+    cur = con.execute(
+        "SELECT * FROM AnalystFeedback WHERE jailbreak_id = ? ORDER BY reviewed_at DESC",
+        (jailbreak_id,)
+    )
+    results = cur.fetchall()
+    con.close()
+    return results

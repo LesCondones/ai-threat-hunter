@@ -1,7 +1,7 @@
-from ingest import ingest_jailbreaks
-from analyze import analyze_threats, load_analysis, save_analysis
-from detections import save_rules
-from report import generate_report
+from ingestion.ingest import ingest_jailbreaks
+from analysis.analyze import analyze_threats, load_analysis, save_analysis
+from output.detections import save_rules
+from output.report import generate_report
 
 def main():
     ingest_jailbreaks()

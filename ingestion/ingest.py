@@ -1,5 +1,5 @@
 from datasets import load_dataset
-from database import create_table, insert_record
+from data.database import create_table, insert_record
 
 def ingest_jailbreaks():
     create_table()

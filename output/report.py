@@ -1,11 +1,11 @@
-from analyze import analyze_threats
+from analysis.analyze import analyze_threats
 from datetime import datetime
 from collections import Counter
 
 
 def generate_report(results):
     now = datetime.now()
-    filename = f"report_{now.strftime('%Y%m%d_%H%M%S')}.md"
+    filename = f"reports/report_{now.strftime('%Y%m%d_%H%M%S')}.md"
 
     severity_counts = Counter(r['severity'] for r in results)
 
@@ -35,7 +35,7 @@ def generate_report(results):
     
 
 if __name__ == "__main__":
-    from analyze import load_analysis, analyze_threats, save_analysis
+    from analysis.analyze import load_analysis, analyze_threats, save_analysis
     
     cached = load_analysis()
     if cached:

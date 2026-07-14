@@ -31,6 +31,6 @@ def save_rules(results):
     print(f"Saved {count} YARA rules to rules/")
     
 if __name__ == "__main__":
-    from analyze import analyze_threats
+    from analysis.analyze import analyze_threats
     results = analyze_threats()
     save_rules(results)

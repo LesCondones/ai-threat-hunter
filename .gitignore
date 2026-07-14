@@ -12,6 +12,12 @@ wheels/
 
 .env
 
-threats.db
+data/threats.db
 analysis_cache.json
 rules/*
+reports/*
+tests/test_atlas.py
+data/chroma_db/*
+CLAUDE.md
+langsmith_dataset.jsonl
+.DS_Store

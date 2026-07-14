@@ -11,23 +11,13 @@
 
 import os
 import json
-import anthropic
 from dotenv import load_dotenv
-from database import get_high_priority
+from data.database import get_high_priority
+from analysis.analysis_graph import run_analysis_graph
+from memory.episodic_memory import save_episode
+
 
 load_dotenv()
-
-SYSTEM_PROMPT = """You are a threat intelligence analyst. When given a jailbreak prompt you will:
-1. Identify the intent — what is the attacker trying to do?
-2. Map it to a MITRE ATT&CK tactic
-3. Extract any IoCs — IPs, domains, file hashes, malicious strings
-4. Rate the severity — LOW, MEDIUM, HIGH, or CRITICAL
-5. Write a one sentence summary
-
-You must respond in JSON format only with these exact keys:
-intent, tactic, iocs, severity, summary"""
-
-client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 def normalize_iocs(iocs):
     if isinstance(iocs, list):
@@ -44,26 +34,26 @@ def analyze_threats():
     records = get_high_priority(threshold=80)
     results = []
     
+    
     for record in records:
         name   = record[1]
         prompt = record[2]
         score  = record[3]
         print(f"Analyzing {name} (score: {score})")
         
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}]
-        )   
-        text = response.content[0].text
-        text = text.strip()
-        text = text.replace("```json", "").replace("```", "").strip()
-        analysis = json.loads(text)
+        graph_result = run_analysis_graph(prompt)
+        
+        analysis = graph_result["analysis_result"]
+        needs_review = graph_result["needs_review"]
+        
         analysis['iocs'] = normalize_iocs(analysis.get('iocs', []))
         analysis['name'] = name
         analysis['score'] = score
+        analysis['jailbreak_id'] = record[0]
+        
         results.append(analysis)
+        
+        save_episode(record, analysis, needs_review)
     
     return results
 
@@ -99,3 +89,5 @@ if __name__ == "__main__":
             print(f"  - {ioc}")
         print(f"Summary:  {r['summary']}")
         print()
+
+
