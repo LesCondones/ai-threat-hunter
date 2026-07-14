@@ -41,17 +41,32 @@ python main.py
 ## Project Structure
 
 ```
-ai_threat_hunter/
-├── main.py              ← entry point — runs full pipeline
-├── ingest.py            ← fetches data from HuggingFace, stores in SQLite
-├── analyze.py           ← Claude AI triage agent with response caching
-├── detections.py        ← generates YARA rules from IoCs
-├── report.py            ← compiles Markdown threat intelligence report
-├── database.py          ← SQLite connection, schema, and queries
-├── rules/               ← generated YARA rules (one per threat)
-├── threats.db           ← SQLite database of ingested jailbreaks
-├── analysis_cache.json  ← cached Claude analysis (avoids repeat API calls)
-└── .env                 ← API keys (not committed)
+ai-threat-hunter/
+├── main.py                 ← entry point — runs full pipeline
+├── ingestion/
+│   ├── ingest.py            ← fetches jailbreak data from HuggingFace, stores in SQLite
+│   └── ingest_atlas.py       ← builds the MITRE ATLAS retrieval collection in ChromaDB
+├── analysis/
+│   ├── analyze.py            ← Claude AI triage agent with response caching
+│   ├── analysis_graph.py      ← LangGraph retrieve-analyze-validate-retry loop
+│   └── retrieve.py            ← MITRE ATLAS context retrieval from ChromaDB
+├── memory/
+│   ├── episodic_memory.py     ← writes analyzed prompts to an S3 Vectors index
+│   └── procedural_memory.py    ← recalls past analyst corrections for similar prompts
+├── feedback/
+│   └── review_flagged.py       ← CLI for analysts to review needs_review records
+├── output/
+│   ├── detections.py           ← generates YARA rules from IoCs
+│   └── report.py                ← compiles Markdown threat intelligence report
+├── data/
+│   ├── database.py              ← SQLite connection, schema, and queries
+│   ├── threats.db               ← SQLite database of ingested jailbreaks (gitignored)
+│   └── chroma_db/                ← MITRE ATLAS embedding store (gitignored)
+├── rules/                        ← generated YARA rules, one per threat (gitignored)
+├── reports/                      ← generated Markdown reports (gitignored)
+├── tests/                        ← manual/calibration scripts, not a pytest suite
+├── analysis_cache.json           ← cached Claude analysis (avoids repeat API calls, gitignored)
+└── .env                          ← API keys (not committed)
 ```
 
 ---
@@ -78,7 +93,7 @@ cp .env.example .env
 **.env file:**
 ```
 ANTHROPIC_API_KEY=your_key_here
-DATABASE=threats.db
+DATABASE=data/threats.db
 ```
 
 ---
@@ -92,11 +107,13 @@ uv run main.py
 
 **Run individual stages:**
 ```bash
-uv run ingest.py      # fetch and store data only
-uv run analyze.py     # run AI analysis only (uses cache if available)
-uv run detections.py  # generate YARA rules only
-uv run report.py      # generate report only
+uv run ingestion/ingest.py           # fetch and store data only
+uv run python -m analysis.analyze    # run AI analysis only (uses cache if available)
+uv run python -m output.detections   # generate YARA rules only
+uv run python -m output.report       # generate report only
 ```
+
+> Anything under `analysis/`, `memory/`, `feedback/`, or `output/` needs to be run as a module (`python -m package.module`) rather than a bare script path, since those files use absolute imports like `from data.database import ...` that only resolve when the repo root is on the path. `main.py` and the `ingestion/` scripts don't have this restriction.
 
 **Force re-analysis (bypass cache):**
 ```bash
@@ -116,7 +133,7 @@ Analyzing Evil Confidant (score: 95.0)
 Analyzing Leo (score: 93.0)
 ...
 Saved 19 YARA rules to rules/
-Report saved to report_20260625_175331.md
+Report saved to reports/report_20260625_175331.md
 
 ✅ Pipeline complete
   → 19 threats analyzed
@@ -183,7 +200,7 @@ All threats are mapped to MITRE ATT&CK tactics. The most common in this dataset:
 
 **Add a new data source:**
 ```python
-# ingest.py
+# ingestion/ingest.py
 def ingest_csv(filepath: str):
     """Ingest jailbreaks from any CSV file."""
     import csv
@@ -204,7 +221,7 @@ ingest_manual([
 
 **Adjust the threat threshold:**
 ```python
-# analyze.py
+# analysis/analyze.py
 records = get_high_priority(threshold=70)  # lower = more threats analyzed
 ```
 ---
