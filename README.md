@@ -1,6 +1,6 @@
 # AI Threat Hunting & Triage Pipeline
 
-An automated security pipeline that ingests real-world LLM jailbreak data, uses Claude AI to perform threat intelligence analysis, generates YARA detection rules, and produces actionable security reports — all in a single command.
+An automated security pipeline that ingests real-world LLM jailbreak data, uses Claude — via a LangGraph agent with retrieval-augmented context and a persistent analyst-feedback memory — to triage threats against MITRE ATLAS, generates YARA detection rules, and produces actionable security reports.
 
 Built as a demonstration of merging traditional threat intelligence workflows with AI-driven automation.
 
@@ -9,18 +9,22 @@ Built as a demonstration of merging traditional threat intelligence workflows wi
 ## What It Does
 
 ```
-ingest → analyze → detect → report
+ingest → analyze (retrieve + procedural memory) → detect → report
 ```
 
+with a separate analyst **feedback** loop closing back into procedural memory.
+
 1. **Ingests** jailbreak prompt datasets from HuggingFace into a local SQLite database
-2. **Triages** high-priority threats (score ≥ 80) using Claude as an AI analyst — extracting intent, MITRE ATT&CK mappings, IoCs, and severity ratings
-3. **Generates** YARA detection rules automatically from extracted IoCs
-4. **Produces** a structured Markdown threat intelligence report
+2. **Triages** high-priority threats (score ≥ 80) with a LangGraph retrieve-analyze-validate-retry loop: Claude is grounded against retrieved MITRE ATLAS techniques and past analyst corrections, then its tactic mapping is validated against what was actually retrieved (re-querying up to 3 times on failure, or flagging `needs_review` on repeated failure)
+3. **Extracts** intent, MITRE ATLAS technique mappings, IoCs, and severity ratings from each threat, and persists the episode (prompt + analysis) to an S3 Vectors index for future recall
+4. **Generates** YARA detection rules automatically from extracted IoCs and uploads them to S3
+5. **Produces** a structured Markdown threat intelligence report and uploads it to S3
+6. **Analysts review** flagged records via a CLI; corrections are stored and surfaced as extra context the next time a similar prompt is triaged
 
 One command runs the entire pipeline:
 
 ```bash
-python main.py
+uv run main.py
 ```
 
 ---
@@ -30,10 +34,13 @@ python main.py
 | Security Task | How This Project Implements It |
 |---|---|
 | Threat ingestion & OSINT | Pulls from HuggingFace jailbreak datasets, stores in SQLite with deduplication |
-| AI-assisted triage | Claude analyzes each prompt, classifies intent, maps to MITRE ATT&CK |
+| AI-assisted triage | Claude/LangGraph agent classifies intent and maps to MITRE ATLAS, grounded via RAG |
+| Grounding / hallucination control | Validates the returned tactic against the techniques actually retrieved that turn; retries or flags for review otherwise |
 | IoC extraction | Automatically extracts malicious strings, trigger phrases, persona keywords |
-| Detection engineering | Generates YARA rules from extracted IoCs for each threat |
-| High-signal reporting | Produces structured reports with severity breakdown and ATT&CK mappings |
+| Detection engineering | Generates YARA rules from extracted IoCs for each threat, stored in S3 |
+| High-signal reporting | Produces structured Markdown reports with severity breakdown and ATLAS mappings, stored in S3 |
+| Analyst feedback loop | CLI-driven review of flagged records; corrections feed back into future triage via procedural memory |
+| Episodic/procedural memory | Past analyzed prompts and analyst corrections are embedded and recalled for similar future prompts |
 | Automation | Full pipeline runs end-to-end without human intervention |
 
 ---
@@ -41,60 +48,60 @@ python main.py
 ## Project Structure
 
 ```
-ai-threat-hunter/
-├── main.py                 ← entry point — runs full pipeline
-├── ingestion/
+ai-triage-agent/
+├── main.py               ← entry point — runs full pipeline
+├── ingestion/             ← pulls raw data in (HuggingFace jailbreaks, MITRE ATLAS catalog)
 │   ├── ingest.py            ← fetches jailbreak data from HuggingFace, stores in SQLite
 │   └── ingest_atlas.py       ← builds the MITRE ATLAS retrieval collection in ChromaDB
-├── analysis/
-│   ├── analyze.py            ← Claude AI triage agent with response caching
+├── analysis/               ← Claude/LangGraph triage agent + ATLAS retrieval
+│   ├── analyze.py            ← pulls high-priority records, runs the graph, caches results
 │   ├── analysis_graph.py      ← LangGraph retrieve-analyze-validate-retry loop
 │   └── retrieve.py            ← MITRE ATLAS context retrieval from ChromaDB
-├── memory/
-│   ├── episodic_memory.py     ← writes analyzed prompts to an S3 Vectors index
+├── memory/                 ← episodic (S3 Vectors) and procedural (analyst feedback) memory
+│   ├── episodic_memory.py     ← writes analyzed prompts + analyses to an S3 Vectors index
 │   └── procedural_memory.py    ← recalls past analyst corrections for similar prompts
-├── feedback/
-│   └── review_flagged.py       ← CLI for analysts to review needs_review records
-├── output/
-│   ├── detections.py           ← generates YARA rules from IoCs
-│   └── report.py                ← compiles Markdown threat intelligence report
-├── data/
+├── feedback/                ← CLI for analysts to review flagged records
+│   └── review_flagged.py       ← walks needs_review records, logs analyst corrections
+├── output/                  ← YARA rule + Markdown report generation
+│   ├── detections.py           ← generates YARA rules from IoCs, uploads to S3
+│   └── report.py                ← compiles Markdown threat intelligence report, uploads to S3
+├── data/                     ← database.py, threats.db, chroma_db/ (all generated/derived data)
 │   ├── database.py              ← SQLite connection, schema, and queries
 │   ├── threats.db               ← SQLite database of ingested jailbreaks (gitignored)
 │   └── chroma_db/                ← MITRE ATLAS embedding store (gitignored)
-├── rules/                        ← generated YARA rules, one per threat (gitignored)
-├── reports/                      ← generated Markdown reports (gitignored)
-├── tests/                        ← manual/calibration scripts, not a pytest suite
-├── analysis_cache.json           ← cached Claude analysis (avoids repeat API calls, gitignored)
-└── .env                          ← API keys (not committed)
+├── tests/                     ← manual/calibration scripts (not pytest)
+├── analysis_cache.json          ← cached Claude analysis (avoids repeat API calls, gitignored)
+└── .env                          ← API keys and config (not committed)
 ```
+
+Generated YARA rules and Markdown reports are written to S3 (`s3://$S3_BUCKET/rules/`, `s3://$S3_BUCKET/reports/`) — not to local `rules/`/`reports/` directories.
 
 ---
 
 ## Setup
 
-**Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/)
+**Prerequisites:** Python 3.13+, [uv](https://docs.astral.sh/uv/), an AWS account with an S3 bucket and S3 Vectors access
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/ai-threat-hunter
-cd ai-threat-hunter
+git clone https://github.com/yourusername/ai-triage-agent
+cd ai-triage-agent
 
-# Create virtual environment and install dependencies
-uv venv
-source .venv/bin/activate
-uv add datasets anthropic python-dotenv
+# Install dependencies (uv-managed project)
+uv sync
 
 # Configure environment
-cp .env.example .env
-# Add your ANTHROPIC_API_KEY to .env
+cp .env.example .env  # or create .env manually
 ```
 
 **.env file:**
 ```
 ANTHROPIC_API_KEY=your_key_here
 DATABASE=data/threats.db
+S3_BUCKET=your-s3-bucket-name
 ```
+
+`S3_BUCKET` is the bucket that generated YARA rules and Markdown reports are uploaded to (`rules/` and `reports/` key prefixes). AWS credentials are picked up from the standard AWS SDK credential chain (environment variables, `~/.aws/credentials`, etc.).
 
 ---
 
@@ -107,10 +114,10 @@ uv run main.py
 
 **Run individual stages:**
 ```bash
-uv run ingestion/ingest.py           # fetch and store data only
-uv run python -m analysis.analyze    # run AI analysis only (uses cache if available)
-uv run python -m output.detections   # generate YARA rules only
-uv run python -m output.report       # generate report only
+uv run ingestion/ingest.py           # fetch HuggingFace dataset -> data/threats.db (SQLite)
+uv run python -m analysis.analyze    # run Claude/LangGraph triage on high-priority records
+uv run python -m output.detections   # generate YARA rules into S3 from analysis results
+uv run python -m output.report       # generate the Markdown report into S3 from analysis results
 ```
 
 > Anything under `analysis/`, `memory/`, `feedback/`, or `output/` needs to be run as a module (`python -m package.module`) rather than a bare script path, since those files use absolute imports like `from data.database import ...` that only resolve when the repo root is on the path. `main.py` and the `ingestion/` scripts don't have this restriction.
@@ -120,6 +127,45 @@ uv run python -m output.report       # generate report only
 rm analysis_cache.json
 uv run main.py
 ```
+
+**Rebuild the MITRE ATLAS retrieval collection:**
+```bash
+uv run ingestion/ingest_atlas.py
+```
+
+**Analyst review of flagged records:**
+```bash
+uv run python -m feedback.review_flagged
+```
+
+Walks through every record the triage agent flagged `needs_review=True`, lets the analyst confirm or correct the tactic/severity, and logs it to the `AnalystFeedback` table. Corrected (not just confirmed) tactics are surfaced as extra context the next time a similar prompt is analyzed.
+
+**Sanity-check ATLAS retrieval quality:**
+```bash
+uv run python -m tests.test_atlas
+```
+
+---
+
+## Architecture
+
+**Pipeline flow:**
+
+1. `ingestion/ingest.py` pulls the `rubend18/ChatGPT-Jailbreak-Prompts` HuggingFace dataset into SQLite, deduplicated on the unique `prompt` column.
+2. `analysis/analyze.py` pulls high-priority records (`score >= 80`) and, for each one, runs `analysis/analysis_graph.py` — a LangGraph `StateGraph`:
+   - **retrieve_and_analyze**: queries a persistent ChromaDB collection for relevant MITRE ATLAS techniques, pulls similar past analyst corrections from procedural memory, and calls Claude for `intent, tactic, iocs, severity, summary`.
+   - **validate_tactic**: checks the returned tactic against the techniques actually retrieved that turn, to catch hallucinated ATT&CK/ATLAS mappings.
+   - **route_after_validation**: retries (up to 3x) on a failed validation, or ends with `needs_review=True` after repeated failures.
+   - Each analyzed record is persisted to episodic memory (S3 Vectors) for future recall, and the full result set is cached to `analysis_cache.json`.
+3. `output/detections.py` turns each result's IoCs into a YARA rule, uploaded to S3.
+4. `output/report.py` renders all results into a timestamped Markdown report, uploaded to S3.
+5. `feedback/review_flagged.py` lets an analyst review `needs_review` records and log corrections, which `memory/procedural_memory.py` surfaces on future runs for similar prompts — closing the loop between human review and future AI triage.
+
+**Key coupling to know before changing things:**
+- The Claude JSON contract (`intent, tactic, iocs, severity, summary`) is shared by `analyze.py`, `output/detections.py`, and `output/report.py` — changing the schema means updating all three.
+- `analysis_cache.json` fully bypasses the LangGraph/Claude pipeline on repeated runs — delete it to force re-analysis, and note that `feedback/review_flagged.py` reads the same cache.
+- `analysis_graph.py` and `tests/test_atlas.py` both instantiate their own ChromaDB client against `./data/chroma_db` — keep the embedding model and collection name in sync with `ingestion/ingest_atlas.py`.
+- `memory/procedural_memory.py` only surfaces a past episode if the analyst's correction actually changed the tactic (a confirmed-correct review contributes nothing to future prompts, by design).
 
 ---
 
@@ -132,16 +178,14 @@ Analyzing APOPHIS (score: 80.0)
 Analyzing Evil Confidant (score: 95.0)
 Analyzing Leo (score: 93.0)
 ...
-Saved 19 YARA rules to rules/
-Report saved to reports/report_20260625_175331.md
 
 ✅ Pipeline complete
   → 19 threats analyzed
-  → 19 YARA rules saved to rules/
+  → 19 YARA rules saved to s3://your-s3-bucket-name/rules/
   → Report saved
 ```
 
-**Generated YARA rule (`rules/Evil_Confidant.yar`):**
+**Generated YARA rule (`s3://$S3_BUCKET/rules/Evil_Confidant.yar`):**
 ```yara
 rule Evil_Confidant {
     meta:
@@ -186,9 +230,9 @@ High-priority threats (score ≥ 80) are automatically selected for AI triage �
 
 ---
 
-## MITRE ATT&CK Coverage
+## MITRE ATLAS Coverage
 
-All threats are mapped to MITRE ATT&CK tactics. The most common in this dataset:
+Threats are mapped to MITRE ATLAS techniques (retrieved from a ChromaDB collection built by `ingestion/ingest_atlas.py`), grounded against techniques actually retrieved for each prompt rather than freely hallucinated. Common mappings in this dataset include:
 
 - **Defense Evasion (TA0005)** — T1562 Impair Defenses, T1036 Masquerading
 - **Initial Access (TA0001)** — T1566 Phishing / Social Engineering
@@ -224,6 +268,7 @@ ingest_manual([
 # analysis/analyze.py
 records = get_high_priority(threshold=70)  # lower = more threats analyzed
 ```
+
 ---
 
 ## Author
