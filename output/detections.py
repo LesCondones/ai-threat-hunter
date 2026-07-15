@@ -1,5 +1,9 @@
 import re
 import os
+import boto3
+
+S3_BUCKET = os.environ["S3_BUCKET"]
+_s3 = boto3.client("s3")
 
 def generate_yara_rule(analysis):
     rule_name = re.sub(r'[^a-zA-Z0-9]', '_', analysis['name'])
@@ -19,16 +23,14 @@ def generate_yara_rule(analysis):
 }}"""
 
 def save_rules(results):
-    os.makedirs("rules", exist_ok=True)
     count = 0
     for analysis in results:
         rule = generate_yara_rule(analysis)
         filename = re.sub(r'[^a-zA-Z0-9]', '_', analysis['name'])
-        filepath = f"rules/{filename}.yar"
-        with open(filepath, 'w') as f:
-            f.write(rule)
+        key = f"rules/{filename}.yar"
+        _s3.put_object(Bucket=S3_BUCKET, Key=key, Body=rule.encode("utf-8"))
         count += 1
-    print(f"Saved {count} YARA rules to rules/")
+    print(f"Saved {count} YARA rules to s3://{S3_BUCKET}/rules/")
     
 if __name__ == "__main__":
     from analysis.analyze import analyze_threats

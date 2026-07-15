@@ -1,3 +1,5 @@
+import os
+
 from ingestion.ingest import ingest_jailbreaks
 from analysis.analyze import analyze_threats, load_analysis, save_analysis
 from output.detections import save_rules
@@ -19,7 +21,7 @@ def main():
     
     print("\n✅ Pipeline complete")
     print(f"  → {len(results)} threats analyzed")
-    print(f"  → {len(results)} YARA rules saved to rules/")
+    print(f"  → {len(results)} YARA rules saved to s3://{os.environ['S3_BUCKET']}/rules/")
     print(f"  → Report saved")
     
 if __name__ == "__main__":
