@@ -28,7 +28,7 @@ intent, tactic, iocs, severity, summary"""
 def call_claude(messages):
     response = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=1000,
+        max_tokens=4096,
         system=SYSTEM_PROMPT,
         messages=messages
     )
@@ -102,8 +102,11 @@ The following known adversarial techniques targeting AI/LLM systems are relevant
     try:
         analysis = json.loads(text)
     except json.JSONDecodeError:
+        # Response was truncated or otherwise malformed (e.g. cut off mid-JSON
+        # by the max_tokens limit). Treat like an invalid tactic so it flows
+        # through the existing retry/give_up path instead of crashing the batch.
         print("MALFORMED JSON:", text)
-        raise
+        analysis = {"intent": None, "tactic": None, "iocs": [], "severity": None, "summary": None}
 
     return {
         "retrieved_context": atlas_results,
